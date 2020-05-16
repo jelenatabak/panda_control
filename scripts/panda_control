@@ -1,0 +1,181 @@
+#!/usr/bin/env python
+
+import sys
+import rospy
+import math
+import tf
+import moveit_commander
+import geometry_msgs.msg
+from std_msgs.msg import Int32
+from geometry_msgs.msg import Pose, Point, Quaternion
+from panda_control.grasp_service import GraspService
+
+class PandaControl(object):
+	def __init__(self):
+		moveit_commander.roscpp_initialize(sys.argv)
+		rospy.init_node('panda_control', anonymous=True)
+
+		self.move_group = moveit_commander.MoveGroupCommander("panda_arm")
+		self.move_group.set_end_effector_link("panda_hand")
+		self.camera_delta_x = 0.04
+		self.pose_goal = Pose()
+		self.listener = tf.TransformListener()
+
+		pose1 = Pose(position=Point(x=0.322,y=-0.143,z=0.879),orientation=Quaternion(x=0.949,y=0.154,z=0.113,w=0.251))
+		pose2 = Pose(position=Point(x=0.29,y=-0.095,z=0.972),orientation=Quaternion(x=0.805,y=0.28,z=0.438,w=-0.287))
+		self.search_positions = [pose1, pose2]
+
+		self.grasp_angle = 0
+		self.grasp_srv = GraspService()
+
+		self.publisher = rospy.Publisher('/grasp_ready', Int32, queue_size = 10)
+
+
+	def go_to_pose_goal(self):
+		self.move_group.set_pose_target(self.pose_goal)
+
+		plan = self.move_group.plan()
+		if plan.joint_trajectory.points:
+				move_success = self.move_group.execute(plan)
+		else:
+		  rospy.logerr("Trajectory is empty. Planning was unsuccessful.")
+
+		self.move_group.stop()
+		self.move_group.clear_pose_targets()
+
+
+	def go_home(self):
+		self.pose_goal.position.x = 0.256
+		self.pose_goal.position.y = 0
+		self.pose_goal.position.z = 0.88
+
+		self.pose_goal.orientation.x = 1
+		self.pose_goal.orientation.y = 0
+		self.pose_goal.orientation.z = 0
+		self.pose_goal.orientation.w = 0
+
+		self.go_to_pose_goal()
+
+
+	def get_current_grasp_angle(self):
+		while not rospy.is_shutdown():
+			try:
+				position,quaternion = self.listener.lookupTransform('/world', '/panda_hand', rospy.Time(0))
+				break
+			except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+				continue
+
+		angles = tf.transformations.euler_from_quaternion(quaternion)
+		return angles[2]
+
+
+	def get_apple_position(self):
+		rospy.sleep(2)
+		while not rospy.is_shutdown():
+			try:
+				position,quaternion = self.listener.lookupTransform('/world', '/dodo_detector_ros/apple_0', rospy.Time(0))
+				return Point(x=position[0],y=position[1],z=position[2])
+				break
+			except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+				continue
+
+
+	def apple_visible(self):
+		rospy.sleep(2)
+		try:
+			self.listener.waitForTransform('/world', '/dodo_detector_ros/apple_0',rospy.Time(0), rospy.Duration(4.0))
+			return True
+		except (tf.Exception):
+			return False
+
+
+	def plan_apple_trajectory(self):
+		rospy.sleep(2)
+		apple = self.get_apple_position()
+		self.pose_goal.position.x = apple.x - self.camera_delta_x
+		self.pose_goal.position.y = apple.y
+		self.pose_goal.position.z = apple.z + 0.4
+		self.pose_goal.orientation.x = 1
+		self.pose_goal.orientation.y = 0
+		self.pose_goal.orientation.z = 0
+		self.pose_goal.orientation.w = 0
+
+		self.go_to_pose_goal()
+		return self.apple_visible()
+
+
+	def apple_servo(self):
+		apple = self.get_apple_position()
+		eef_z = self.pose_goal.position.z
+		current_grasp_angle = self.get_current_grasp_angle()
+
+		while eef_z > apple.z:
+			if eef_z - apple.z < 0.12: # udaljenost senzori-saka
+				# sad se pozicionirati tako da je jabuka izmedju prstiju, a ne u centru kamere
+				# odkomentirat kad budem imala node za hvataljku koji ce drzati hvataljku otvorenu
+				#self.pose_goal.position.x = apple.x
+				#self.pose_goal.position.y = apple.y
+				#self.go_to_pose_goal()
+
+				quaternion = tf.transformations.quaternion_from_euler(3.14, 0, self.grasp_angle)
+				self.pose_goal.orientation.x = quaternion[0]
+				self.pose_goal.orientation.y = quaternion[1]
+				self.pose_goal.orientation.z = quaternion[2]
+				self.pose_goal.orientation.w = quaternion[3]
+
+				#self.go_to_pose_goal()
+				return
+
+			#self.pose_goal.position.x = apple.x - self.camera_delta_x
+			#self.pose_goal.position.y = apple.y
+			self.pose_goal.position.x = apple.x - self.camera_delta_x*math.cos(current_grasp_angle)
+			self.pose_goal.position.y = apple.y + self.camera_delta_x*math.sin(current_grasp_angle)
+
+			eef_z -= 0.02
+			self.pose_goal.position.z = eef_z
+			self.go_to_pose_goal()
+			apple = self.get_apple_position()
+
+
+def main():
+	try:
+		controller = PandaControl()
+		controller.go_home()
+
+		while not rospy.is_shutdown():
+			# pretrazivanje prostora
+			# eventualano dodati jos koju poziciju ili napraviti nesto pametnije
+			for pose in controller.search_positions:
+				if controller.apple_visible():
+					break
+				controller.pose_goal = pose
+				controller.go_to_pose_goal()
+
+			if not controller.apple_visible():
+				rospy.logerr("I don't see any apples. Going back to home position and quitting.")
+				controller.go_home()
+				break
+
+			if controller.plan_apple_trajectory():
+				grasp_rectangle = controller.grasp_srv.call()
+				controller.grasp_angle = grasp_rectangle.theta
+				controller.apple_servo()
+				controller.publisher.publish(1)
+				# node za upravljanje hvataljkom je do sada drzao otvorenu hvataljku
+				# kad procita informaciju sa /grasp_ready pocinje impedantno upravljanje
+				# taj node radi i zapis u 3D
+				break
+			else:
+				rospy.logerr("I don't see any apples. I will try again.")
+				controller.go_home()
+				continue
+
+
+	except rospy.ROSInterruptException:
+		return
+	except KeyboardInterrupt:
+		return
+
+if __name__ == '__main__':
+	# rospy.sleep(20)
+	main()
