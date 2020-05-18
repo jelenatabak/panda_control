@@ -177,5 +177,5 @@ def main():
 		return
 
 if __name__ == '__main__':
-	# rospy.sleep(20)
+	rospy.sleep(10)
 	main()
