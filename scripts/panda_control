@@ -156,7 +156,7 @@ def main():
 				controller.grasp_angle = grasp_rectangle.theta
 				controller.apple_servo()
 
-				# hand_controller.impendance_control()
+				hand_controller.impendance_control()
 				# hand_controller.save_3D_model() ili update_pointcloud() ili nesto slicno
 				# controller.go_home()
 
