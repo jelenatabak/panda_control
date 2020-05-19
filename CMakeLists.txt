@@ -22,9 +22,6 @@ catkin_package(CATKIN_DEPENDS message_runtime std_msgs)
 
 include_directories(include ${catkin_INCLUDE_DIRS})
 
-add_executable(handControl src/handControl.cpp)
-target_link_libraries(handControl ${catkin_LIBRARIES})
-add_dependencies(handControl panda_control_generate_messages_cpp)
 
 
 
