@@ -2,11 +2,8 @@
 
 import sys
 import rospy
-import math
 import tf
 import moveit_commander
-import geometry_msgs.msg
-from std_msgs.msg import Int32
 from geometry_msgs.msg import Pose, Point, Quaternion
 from panda_control.grasp_service import GraspService
 from panda_control.hand_control import HandControl
@@ -56,18 +53,6 @@ class PandaControl(object):
 		self.go_to_pose_goal()
 
 
-	def get_current_grasp_angle(self):
-		while not rospy.is_shutdown():
-			try:
-				position,quaternion = self.listener.lookupTransform('/world', '/panda_hand', rospy.Time(0))
-				break
-			except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
-				continue
-
-		angles = tf.transformations.euler_from_quaternion(quaternion)
-		return angles[2]
-
-
 	def get_apple_position(self):
 		rospy.sleep(2)
 		while not rospy.is_shutdown():
@@ -106,7 +91,6 @@ class PandaControl(object):
 	def apple_servo(self):
 		apple = self.get_apple_position()
 		eef_z = self.pose_goal.position.z
-		current_grasp_angle = self.get_current_grasp_angle()
 
 		while eef_z > apple.z:
 			if eef_z - apple.z < 0.12: # distance from the arm eef to the sensors
@@ -122,8 +106,8 @@ class PandaControl(object):
 				self.go_to_pose_goal()
 				return
 
-			self.pose_goal.position.x = apple.x - self.camera_delta_x*math.cos(current_grasp_angle)
-			self.pose_goal.position.y = apple.y + self.camera_delta_x*math.sin(current_grasp_angle)
+			self.pose_goal.position.x = apple.x - self.camera_delta_x
+			self.pose_goal.position.y = apple.y
 
 			eef_z -= 0.02
 			self.pose_goal.position.z = eef_z

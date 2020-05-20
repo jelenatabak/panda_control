@@ -7,7 +7,4 @@
 
 	<!-- trajectory planning -->
 	<node pkg="panda_control" type="panda_control" name="panda_control" output="screen" />
-
-	<!-- hand control -->
-	<node pkg="panda_control" type="handControl" name="handControl" output="screen" />
 </launch>
