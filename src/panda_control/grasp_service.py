@@ -95,4 +95,4 @@ class GraspService(object):
             return grasp
 
     	except rospy.ServiceException, e:
-            print "Service call failed: %s"%e
+            rospy.logerr("Service call failed: ", e)

@@ -11,6 +11,7 @@ find_package(catkin REQUIRED COMPONENTS
   cv_bridge
   tf
   message_generation
+  impedance_control
 )
 
 catkin_python_setup()
