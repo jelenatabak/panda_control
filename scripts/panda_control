@@ -122,6 +122,7 @@ def main():
 		controller.go_home()
 
 		hand_controller = HandControl()
+		hand_controller.read_point_cloud()
 
 		while not rospy.is_shutdown():
 			for pose in controller.search_positions:
@@ -138,13 +139,10 @@ def main():
 			if controller.plan_apple_trajectory():
 				grasp_rectangle = controller.grasp_srv.call()
 				controller.grasp_angle = grasp_rectangle.theta
+				hand_controller.read_point_cloud()
 				controller.apple_servo()
 
 				hand_controller.impendance_control()
-				rospy.spin()
-				# hand_controller.save_3D_model() ili update_pointcloud() ili nesto slicno
-				# controller.go_home()
-
 				break
 			else:
 				rospy.logerr("I don't see any apples. I will try again.")

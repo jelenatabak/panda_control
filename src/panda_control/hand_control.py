@@ -2,15 +2,20 @@
 
 import sys
 import rospy
+import ros_numpy
 import math
 import tf
 import moveit_commander
+import numpy as np
 from geometry_msgs.msg import WrenchStamped
 from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import Pose, Point, Quaternion
+from sensor_msgs.msg import PointCloud2
 from std_msgs.msg import Float64MultiArray, Float64
 from std_srvs.srv import SetBool, SetBoolRequest, SetBoolResponse
 from controller_manager_msgs.srv import SwitchController
+from tf2_sensor_msgs.tf2_sensor_msgs import do_transform_cloud
+import tf2_ros
 
 class ForceSensor(object):
     def __init__(self, topic):
@@ -53,6 +58,44 @@ class HandControl(object):
 			rospy.loginfo("Controllers switched")
 		except rospy.ServiceException, e:
 			print "Service call failed: %s"%e
+
+    def read_point_cloud(self):
+        self.pc = rospy.wait_for_message('/camera/depth/points', PointCloud2)
+
+        tf_buffer = tf2_ros.Buffer()
+        tf_listener = tf2_ros.TransformListener(tf_buffer)
+
+        while not rospy.is_shutdown():
+            try:
+                transform = tf_buffer.lookup_transform('panda_camera_link','world', rospy.Time())
+                break
+            except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+                continue
+
+        self.pc_world = do_transform_cloud(self.pc, transform)
+        self.cloud_array = ros_numpy.point_cloud2.pointcloud2_to_array(self.pc_world)
+
+    def publish_point_cloud(self):
+        pcl = ros_numpy.point_cloud2.array_to_pointcloud2(self.cloud_array, stamp=None, frame_id='world')
+        self.pcl_pub = rospy.Publisher("/updated_point_cloud", PointCloud2, queue_size=5)
+        self.pcl_pub.publish(pcl)
+
+    def update_point_cloud(self):
+        # dodati transformaciju do unutarnje strane senzora
+
+        x = np.float32(self.left_finger_pose.pose.position.x)
+        y = np.float32(self.left_finger_pose.pose.position.y)
+        z = np.float32(self.left_finger_pose.pose.position.z)
+        rgb = np.float32(0)
+
+        self.cloud_array = np.append(self.cloud_array, np.array([x,y,z,rgb], dtype=self.cloud_array.dtype))
+
+        x = np.float32(self.right_finger_pose.pose.position.x)
+        y = np.float32(self.right_finger_pose.pose.position.y)
+        z = np.float32(self.right_finger_pose.pose.position.z)
+        rgb = np.float32(0)
+
+        self.cloud_array = np.append(self.cloud_array, np.array([x,y,z,rgb], dtype=self.cloud_array.dtype))
 
     def publish_pose(self):
         while not rospy.is_shutdown():
@@ -172,10 +215,10 @@ class HandControl(object):
             return 1
 
     def impendance_control(self):
-        while (self.left_sensor.sum_of_forces()+self.right_sensor.sum_of_forces()) < 0.1:
+        while (self.left_sensor.sum_of_forces()+self.right_sensor.sum_of_forces()) < 0.001:
             self.update_width(-0.001);
 
-        while(abs(self.left_sensor.sum_of_forces()-self.right_sensor.sum_of_forces())) > 0.05:
+        while(abs(self.left_sensor.sum_of_forces()-self.right_sensor.sum_of_forces())) > 0.005:
             rospy.loginfo("Moving the arm")
             direction = self.force_determine_direction()
             self.update_arm_pose(0.005, direction)
@@ -186,6 +229,8 @@ class HandControl(object):
             rospy.sleep(1)
 
         self.publish_pose()
+        self.update_point_cloud()
+        self.publish_point_cloud()
 
         rospy.wait_for_service('/impedance_control/start')
         self.starter = rospy.ServiceProxy('/impedance_control/start', SetBool)
