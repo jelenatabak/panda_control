@@ -12,7 +12,7 @@ from panda_control.hand_control import HandControl
 class PandaControl(object):
 	def __init__(self):
 		moveit_commander.roscpp_initialize(sys.argv)
-		rospy.init_node('panda_control', anonymous=True)
+		rospy.init_node('panda_control')
 
 		self.move_group = moveit_commander.MoveGroupCommander("panda_arm")
 		self.move_group.set_end_effector_link("panda_hand")
@@ -99,7 +99,7 @@ class PandaControl(object):
 				self.pose_goal.position.y = apple.y
 				self.go_to_pose_goal()
 
-				quaternion = tf.transformations.quaternion_from_euler(3.14, 0, self.grasp_angle)
+				quaternion = tf.transformations.quaternion_from_euler(3.14, 0, 0) # self.grasp_angle
 				self.pose_goal.orientation.x = quaternion[0]
 				self.pose_goal.orientation.y = quaternion[1]
 				self.pose_goal.orientation.z = quaternion[2]
@@ -122,7 +122,6 @@ def main():
 		controller.go_home()
 
 		hand_controller = HandControl()
-		hand_controller.open_gripper()
 
 		while not rospy.is_shutdown():
 			for pose in controller.search_positions:
@@ -142,6 +141,7 @@ def main():
 				controller.apple_servo()
 
 				hand_controller.impendance_control()
+				rospy.spin()
 				# hand_controller.save_3D_model() ili update_pointcloud() ili nesto slicno
 				# controller.go_home()
 

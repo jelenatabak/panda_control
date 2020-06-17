@@ -8,7 +8,9 @@ import moveit_commander
 from geometry_msgs.msg import WrenchStamped
 from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import Pose, Point, Quaternion
+from std_msgs.msg import Float64MultiArray, Float64
 from std_srvs.srv import SetBool, SetBoolRequest, SetBoolResponse
+from controller_manager_msgs.srv import SwitchController
 
 class ForceSensor(object):
     def __init__(self, topic):
@@ -26,14 +28,31 @@ class ForceSensor(object):
 class HandControl(object):
     def __init__(self):
         self.pub_pose = rospy.Publisher("/impedance_control/pose_stamped_ref_input", PoseStamped, queue_size=5)
+        self.move_group_arm = moveit_commander.MoveGroupCommander("panda_arm")
         self.listener = tf.TransformListener()
 
-        self.move_group_arm = moveit_commander.MoveGroupCommander("panda_arm")
-        self.move_group_hand = moveit_commander.MoveGroupCommander("hand")
+        self.position_controller = ['gripper_position_controller']
+        self.trajectory_controller = ['panda_hand_controller']
+        self.switch_controller(self.position_controller, self.trajectory_controller)
+
+        self.gripper_pub = rospy.Publisher("/gripper_position_controller/command", Float64MultiArray, queue_size=5)
+        while not self.gripper_pub.get_num_connections():
+            rospy.sleep(1)
+
+        self.gripper_current = [0,0]
         self.open_gripper()
 
         self.right_sensor = ForceSensor("/ft_right_sensor")
         self.left_sensor = ForceSensor("/ft_left_sensor")
+
+    def switch_controller(self, start_controllers, stop_controllers):
+		rospy.wait_for_service('/controller_manager/switch_controller')
+		try:
+			switch_controller = rospy.ServiceProxy('/controller_manager/switch_controller', SwitchController)
+			ret = switch_controller(start_controllers, stop_controllers, 2, True, 5)
+			rospy.loginfo("Controllers switched")
+		except rospy.ServiceException, e:
+			print "Service call failed: %s"%e
 
     def publish_pose(self):
         while not rospy.is_shutdown():
@@ -66,26 +85,22 @@ class HandControl(object):
 
 
     def open_gripper(self):
-        joint_goal = self.move_group_hand.get_current_joint_values()
-        joint_goal[0] = 0.04
-        joint_goal[1] = 0.04
-        self.move_group_hand.go(joint_goal, wait=True)
-        self.move_group_hand.stop()
+        array = Float64MultiArray(data=[0.04, 0.04])
+        self.gripper_current = [0.04,0.04]
+        self.gripper_pub.publish(array)
 
     def update_width (self, dx):
         rospy.loginfo("Changing gripper width for: %f", dx)
-        joint_goal = self.move_group_hand.get_current_joint_values()
 
-        rospy.loginfo(joint_goal)
-        if (joint_goal[0] > 0.039 or joint_goal[1] > 0.039) and dx > 0:
+        if (self.gripper_current[0] > 0.039 or self.gripper_current[1] > 0.039) and dx > 0:
             self.open_gripper()
             rospy.loginfo("Gripper width reached maximum!")
             return 0
 
-        joint_goal[0] += dx
-        joint_goal[1] += dx
-        self.move_group_hand.go(joint_goal, wait=True)
-        self.move_group_hand.stop()
+        self.gripper_current[0] += dx
+        self.gripper_current[1] += dx
+        array = Float64MultiArray(data=self.gripper_current)
+        self.gripper_pub.publish(array)
         return 1
 
     def update_arm_pose(self, dx, direction):
