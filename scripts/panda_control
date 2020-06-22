@@ -27,6 +27,8 @@ class PandaControl(object):
 		self.grasp_angle = 0
 		self.grasp_srv = GraspService()
 
+		self.hand_controller = HandControl()
+
 
 	def go_to_pose_goal(self):
 		self.move_group.set_pose_target(self.pose_goal)
@@ -79,7 +81,7 @@ class PandaControl(object):
 		apple = self.get_apple_position()
 		self.pose_goal.position.x = apple.x - self.camera_delta_x
 		self.pose_goal.position.y = apple.y
-		self.pose_goal.position.z = apple.z + 0.4
+		self.pose_goal.position.z = apple.z + 0.2
 		self.pose_goal.orientation.x = 1
 		self.pose_goal.orientation.y = 0
 		self.pose_goal.orientation.z = 0
@@ -95,11 +97,12 @@ class PandaControl(object):
 
 		while eef_z > apple.z:
 			if eef_z - apple.z < 0.12: # distance from the arm eef to the sensors
+				self.hand_controller.read_point_cloud()
 				self.pose_goal.position.x = apple.x
 				self.pose_goal.position.y = apple.y
 				self.go_to_pose_goal()
 
-				quaternion = tf.transformations.quaternion_from_euler(3.14, 0, 0) # self.grasp_angle
+				quaternion = tf.transformations.quaternion_from_euler(3.14, 0, self.grasp_angle)
 				self.pose_goal.orientation.x = quaternion[0]
 				self.pose_goal.orientation.y = quaternion[1]
 				self.pose_goal.orientation.z = quaternion[2]
@@ -121,9 +124,6 @@ def main():
 		controller = PandaControl()
 		controller.go_home()
 
-		hand_controller = HandControl()
-		hand_controller.read_point_cloud()
-
 		while not rospy.is_shutdown():
 			for pose in controller.search_positions:
 				if controller.apple_visible():
@@ -139,10 +139,9 @@ def main():
 			if controller.plan_apple_trajectory():
 				grasp_rectangle = controller.grasp_srv.call()
 				controller.grasp_angle = grasp_rectangle.theta
-				hand_controller.read_point_cloud()
 				controller.apple_servo()
 
-				hand_controller.impendance_control()
+				controller.hand_controller.impendance_control()
 				break
 			else:
 				rospy.logerr("I don't see any apples. I will try again.")

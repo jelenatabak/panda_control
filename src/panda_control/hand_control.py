@@ -7,6 +7,8 @@ import math
 import tf
 import moveit_commander
 import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 from geometry_msgs.msg import WrenchStamped
 from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import Pose, Point, Quaternion
@@ -41,6 +43,8 @@ class HandControl(object):
         self.switch_controller(self.position_controller, self.trajectory_controller)
 
         self.gripper_pub = rospy.Publisher("/gripper_position_controller/command", Float64MultiArray, queue_size=5)
+        self.gripper__width_pub = rospy.Publisher("/gripper_width", Float64, queue_size=5)
+        self.left_pub = rospy.Publisher("/left_force_module", Float64, queue_size=10)
         while not self.gripper_pub.get_num_connections():
             rospy.sleep(1)
 
@@ -50,6 +54,13 @@ class HandControl(object):
         self.right_sensor = ForceSensor("/ft_right_sensor")
         self.left_sensor = ForceSensor("/ft_left_sensor")
 
+        self.force_ref_x = 1
+        self.force_ref_y = 1
+        self.force_ref_z = 0.1
+        self.force_ref_module = 1.4
+
+        self.new_pc_points = np.empty((0,3))
+
     def switch_controller(self, start_controllers, stop_controllers):
 		rospy.wait_for_service('/controller_manager/switch_controller')
 		try:
@@ -58,6 +69,18 @@ class HandControl(object):
 			rospy.loginfo("Controllers switched")
 		except rospy.ServiceException, e:
 			print "Service call failed: %s"%e
+
+    def plot_point_cloud(self):
+        points = ros_numpy.point_cloud2.get_xyz_points(self.cloud_array)
+        points = points[points[:,0] > 0.3]
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        ax.scatter(points[:,2], points[:,1], points[:,0], c='r', marker='o')
+        ax.scatter(self.new_pc_points[:,0], self.new_pc_points[:,1], self.new_pc_points[:,2], s=100, c='k', marker='o')
+        ax.set_xlabel('x-os')
+        ax.set_ylabel('y-os')
+        ax.set_zlabel('z-os')
+        plt.show()
 
     def read_point_cloud(self):
         self.pc = rospy.wait_for_message('/camera/depth/points', PointCloud2)
@@ -81,21 +104,22 @@ class HandControl(object):
         self.pcl_pub.publish(pcl)
 
     def update_point_cloud(self):
-        # dodati transformaciju do unutarnje strane senzora
-
-        x = np.float32(self.left_finger_pose.pose.position.x)
-        y = np.float32(self.left_finger_pose.pose.position.y)
-        z = np.float32(self.left_finger_pose.pose.position.z)
+        x = -1*np.float32(self.left_finger_pose.pose.position.x)
+        y = -1*np.float32(self.left_finger_pose.pose.position.y)
+        z = np.float32(self.left_finger_pose.pose.position.z)-0.06
         rgb = np.float32(0)
 
-        self.cloud_array = np.append(self.cloud_array, np.array([x,y,z,rgb], dtype=self.cloud_array.dtype))
+        self.new_pc_points = np.append(self.new_pc_points, np.array([[x,y,z]]), axis=0)
+        #self.cloud_array = np.append(self.cloud_array, np.array([x,y,z,rgb], dtype=self.cloud_array.dtype))
 
-        x = np.float32(self.right_finger_pose.pose.position.x)
-        y = np.float32(self.right_finger_pose.pose.position.y)
-        z = np.float32(self.right_finger_pose.pose.position.z)
+        x = -1*np.float32(self.right_finger_pose.pose.position.x)
+        y = -1*np.float32(self.right_finger_pose.pose.position.y)
+        z = np.float32(self.right_finger_pose.pose.position.z)-0.06
         rgb = np.float32(0)
 
-        self.cloud_array = np.append(self.cloud_array, np.array([x,y,z,rgb], dtype=self.cloud_array.dtype))
+        self.new_pc_points = np.append(self.new_pc_points, np.array([[x,y,z]]), axis=0)
+        rospy.logerr(self.new_pc_points.shape)
+        #self.cloud_array = np.append(self.cloud_array, np.array([x,y,z,rgb], dtype=self.cloud_array.dtype))
 
     def publish_pose(self):
         while not rospy.is_shutdown():
@@ -131,6 +155,7 @@ class HandControl(object):
         array = Float64MultiArray(data=[0.04, 0.04])
         self.gripper_current = [0.04,0.04]
         self.gripper_pub.publish(array)
+        self.gripper__width_pub.publish(0.08)
 
     def update_width (self, dx):
         rospy.loginfo("Changing gripper width for: %f", dx)
@@ -138,12 +163,15 @@ class HandControl(object):
         if (self.gripper_current[0] > 0.039 or self.gripper_current[1] > 0.039) and dx > 0:
             self.open_gripper()
             rospy.loginfo("Gripper width reached maximum!")
+            rospy.sleep(1)
             return 0
 
         self.gripper_current[0] += dx
         self.gripper_current[1] += dx
         array = Float64MultiArray(data=self.gripper_current)
         self.gripper_pub.publish(array)
+        self.gripper__width_pub.publish(self.gripper_current[1]*2)
+        rospy.sleep(1)
         return 1
 
     def update_arm_pose(self, dx, direction):
@@ -173,19 +201,21 @@ class HandControl(object):
             return 1
 
     def pose_callback(self, data):
-        if self.equal_to_current_pose(data):
+        left_module = self.left_sensor.sum_of_forces()
+        self.left_pub.publish(left_module)
+        if abs(left_module-self.force_ref_module) < 0.1:
             self.starter(False)
             return
 
         direction = self.pose_determine_direction(data, self.left_finger_pose, self.right_finger_pose)
-        if not self.update_width(direction*0.001):
+        if not self.update_width(direction*0.0001):
             self.starter(False)
+            rospy.sleep(3)
         else:
             self.publish_pose()
-            rospy.sleep(3)
 
     def equal_to_current_pose(self, data):
-        xc = self.left_finger_pose.pose.position.x
+        xc = self.left_sensor.pose.position.x
         yc = self.left_finger_pose.pose.position.y
         zc = self.left_finger_pose.pose.position.z
 
@@ -193,7 +223,7 @@ class HandControl(object):
         yr = data.position.y
         zr = data.position.z
 
-        if math.sqrt((xc-xr)**2 + (yc-yr)**2 + (zc-zr)**2) < 0.0001:
+        if math.sqrt((xc-xr)**2 + (yc-yr)**2 + (zc-zr)**2) < 0.001:
             return True
         else:
             return False
@@ -215,10 +245,12 @@ class HandControl(object):
             return 1
 
     def impendance_control(self):
-        while (self.left_sensor.sum_of_forces()+self.right_sensor.sum_of_forces()) < 0.001:
+        while (self.left_sensor.sum_of_forces()+self.right_sensor.sum_of_forces()) < 1:
+            self.left_pub.publish(self.left_sensor.sum_of_forces())
             self.update_width(-0.001);
 
-        while(abs(self.left_sensor.sum_of_forces()-self.right_sensor.sum_of_forces())) > 0.005:
+        while(abs(self.left_sensor.sum_of_forces()-self.right_sensor.sum_of_forces())) > 0.5:
+            self.left_pub.publish(self.left_sensor.sum_of_forces())
             rospy.loginfo("Moving the arm")
             direction = self.force_determine_direction()
             self.update_arm_pose(0.005, direction)
@@ -228,17 +260,15 @@ class HandControl(object):
         while not self.pub_pose.get_num_connections():
             rospy.sleep(1)
 
+        self.left_pub.publish(self.left_sensor.sum_of_forces())
         self.publish_pose()
         self.update_point_cloud()
+        self.plot_point_cloud()
         self.publish_point_cloud()
 
         rospy.wait_for_service('/impedance_control/start')
         self.starter = rospy.ServiceProxy('/impedance_control/start', SetBool)
         self.starter(True)
 
-        rospy.Subscriber('/impedance_control/pose_output', Pose, self.pose_callback)
+        rospy.Subscriber('/impedance_control/pose_output', Pose, self.pose_callback, queue_size=1)
         rospy.spin()
-
-        # pomaknut ruku nakon zatvaranja hvataljke tako da na desnom senzoru nema promjena
-        # kreirat impedance_control i za desni senzor (iz launcha?)
-        # za desni raditi pomake ruke, a hvataljku podesavati tako da nema promjene na lijevom
